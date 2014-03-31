@@ -12,21 +12,26 @@ sector starts with a one-byte header:
 * A value 0x55 indicates that the sector is in use and it is the newest
   sector containing valid data.
 
-* A value 0x50 indicates that the sector is in use and it is the oldest
-  sector containing valid data.
-
 * A byte 0xFF indicates that this sector should be erased before use
 
 * A value 0x00 indicates that this sector is entirely empty and should be
   erased.
 
-* A value 0x7F indicates that the sector has been erased.
+* A value 0x7F indicates that the sector has been erased, but it is the
+  last free sector so it shall not be used for data.
 
-Ie, there is a series of tags 0x7F 0x7F 0x7F 0x50 0x00 0x54 0x55 0x7F 0x7F
+* A value 0x5F indicates that the sector has been erased, and it can be
+  used for data.
+
+Sectors marked EMPTY should only occur in between sectors that contain
+values. If the last sector is empty, it shall be formatted and marked 0x7F.
+
+Ie, there is a series of tags 0x5F 0x5F 0x7F 0x50 0x00 0x54 0x55 0x5F 0x5F
 indicating three sectors with data and one sector that is entirely empty,
-with three empty sectors before and two empty sectors after.
+with three erased sectors before (two of which can be used) and two erased sectors after
 
-A typical sector header life cycle is that all headers are set to 0x7F,
+A typical sector header life cycle is that the headers is set to 0x7F,
+then 0x5F,
 then used and set to 0x55, then to 0x54 (possibly to 0x00).
 When garbage collected it is erased; becomes
 temporarily 0xFF, and is then set to 0x7F again.
@@ -36,32 +41,32 @@ Key value pairs
 
 Each key value pair comprises a sequence of N bytes:
 
-#. two bytes header denoting the length of this key value pair (including
-   the header), N. The two bytes are stored most significant byte first,
-   and N shall be smaller than 65280 (ie, the first byte shall not be 0xFF).
+#. Bytes 0 and 1 denote the length of this key value pair (including
+   the header), N. The two bytes are stored least significant byte first,
+   and N shall be smaller than 65280 (ie, the second byte shall not be 0xFF).
 
-#. one byte header designating the validity of the key-value pair. Possible
+#. Byte 2 denotes the length of the key, LK, the length must not be 0 or 0xFF.
+
+#. Bytes 3..LK+2 comprise the key
+
+#. Bytes LK+3..N-2 comprise the value
+
+#. Byte N-1 denotes the validity of the key-value pair. Possible
    values are 0xFF (uninitialised), 0xAA (valid), and 0x00 (no longer
    valid).
 
-#. one byte header denoting the length of the key, LK
+Note that if a key-value pair is written one byte at a time from beginning
+to end, and the system powers down half-way, then we can establish from the
+values as to where the write failed. If Byte 1 is 0xFF, then the length is
+invalid; if Byte N-1 is note 0xAA or 0x00 then the key/value pair didn't write.
 
-#. LK bytes comprising the key
-
-#. N-LK-6 bytes comprising the value
-
-#. two bytes trailer denoting the length of this key value pair, N. Here, N
-   is written LSB first. Given the aforementioned constraints on N, the
-   last byte cannot be 0xFF.
-
-For a key value pair to be valid, the two length fields at the
-beginning and the end should be identical, and the header should contain
-the value 0xAA. A value 0x00 indicates that this key-value pair is not in use
-and should be recycled. 
+For a key value pair to be valid, the final byte should contain the value
+0xAA. A value 0x00 indicates that this key-value pair is not in use and
+should be recycled.
 
 Key value pairs never straddle a sector boundary; if a new one would
-straddle one, the sector is terminated by creating an empty pair to fill
-the final sector, before using the next empty sector.
+straddle the boundary, the last part of the sector is left unused and the
+next sector is used.
 
 Searching for a key-value pair
 ++++++++++++++++++++++++++++++
@@ -130,26 +135,29 @@ On initialisation the database is checked for consistency, and fixed if
 necessary. The fix only fixes operations that were interrupted (such as
 write and erase operations), it does not fix random corruption of flash.
 
-Iterate through the sectors in turn, and find any sectors with a mark
-different from 0x7F, 0x55, and 0x00 and erase this sector. Inside the first
-and the last sector we must check that the records are consistent; that is,
-the bytes at location N-1 and N-2 must be the length N.
+Iterate through the sectors in turn, and check that the sector headers are
+a sequence 0x5F*, 0x7F, 0x54, {0,0x54}*, 0x55.
 
-* In the last sector, check all records for inconsistencies in the length
-  bytes. If any inconsitency is found, then erase the sector.
+* If 0x7F is missing, erase the first sector after 0x5F and erase it, mark
+  it as 0x7F.
 
-* In the first sector, find the first element and check for any
-  inconsistenct length bytes; if found, then make the length bytes
-  consistent by writing N into N-1 and N-2. It maybe that the first write
-  of N was interrupted, in which case the lenght will be a random number,
-  therefore verify that the rest of the sector is empty (0xFF), before
-  making the length byte a small number, and creating an empty record of
-  that length.
+* Now check that the newest record in the newest sector is consistent,
+  that is, a tag 0xAA at offset N. If not, mark that record as EMPTY
+  (0x00), check that the length is sensible.
 
-Finally, we must check that there isn't a duplicate record. This can only
-be the last record that was written. So search for an old value of the
-newest record, and delete that if found.
+* If the newest record was sensible, check for any duplicates of it
+  anywhere. Erase it if found.
+
+* Now verify that the last sector (post 0x7F) is not empty. If it is, erase
+  it, mark it as 0x7F, mark the previous one as 0x5F and repeat.
 
 Now, check if any sector is completely empty, if so mark as empty (0x00),
 and check if there are any old empty sectors that can be erased.
 
+Caching
++++++++
+
+The library caches the location of the newest sector (the head sector), and
+the location of the index of the first unwritten byte (the head index).
+These are initialised when the library init function is called, and then
+kept up-to-date.

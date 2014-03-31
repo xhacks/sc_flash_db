@@ -13,15 +13,20 @@ extern void flash_db_init();
  */
 extern int flash_db_get(char key[], unsigned char buffer[n], int n);
 
-/** Function that stores or updates the value for a given key. Keys are ASCII
- * strings that can be up to 256 characters long, and can contain any
- * character except for '\0'. Values can be up to 65536 bytes long.
+/** Function that stores or updates the value for a given key. Keys are
+ * ASCII strings that can be up to 256 characters long, and can contain any
+ * character except for '\0'. Values can be up to 65536 bytes long. Note
+ * that there must always be at least one empty sector in the system (for
+ * garbage collection), and that old values cannot be reclaimed until the
+ * new value is written. This requires a minimum empty space on one sector
+ * plus the length of the value put to succeed.
  *
  * \param key    key to store the value under
  * \param buffer value to store
  * \param n      the number of bytes in the value.
+ * \returns 0 if the put was successful, or non zero if there was no room to put the value.
  */
-extern void flash_db_put(char key[], unsigned char buffer[n], int n);
+extern int flash_db_put(char key[], unsigned char buffer[n], int n);
 
 /** Function that retrieves keys that are stored in the database. The order
  * in which the keys are retrieved is not specified. Repeated calls to this
